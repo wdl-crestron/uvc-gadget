@@ -115,44 +115,18 @@ struct uvc_format_info {
     const struct uvc_frame_info *frames;
 };
 
+#define DEFAULT_WIDTH 1920
+#define DEFAULT_HEIGHT 1080
+#define DEFAULT_INTERVAL_x100ns 333333
+
 static const struct uvc_frame_info uvc_frames_yuyv[] = {
-    {
-        640,
-        360,
-        {666666, 10000000, 50000000, 0},
-    },
-    {
-        1280,
-        720,
-        {50000000, 0},
-    },
-    {
-        0,
-        0,
-        {
-            0,
-        },
-    },
+    {DEFAULT_WIDTH, DEFAULT_HEIGHT, {DEFAULT_INTERVAL_x100ns, 0}},
+    {0, 0, {0}},
 };
 
 static const struct uvc_frame_info uvc_frames_mjpeg[] = {
-    {
-        640,
-        360,
-        {666666, 10000000, 50000000, 0},
-    },
-    {
-        1280,
-        720,
-        {50000000, 0},
-    },
-    {
-        0,
-        0,
-        {
-            0,
-        },
-    },
+    {DEFAULT_WIDTH, DEFAULT_HEIGHT, {DEFAULT_INTERVAL_x100ns, 0}},
+    {0, 0, {0}},
 };
 
 static const struct uvc_format_info uvc_formats[] = {
@@ -752,7 +726,9 @@ static int uvc_video_set_format(struct uvc_device *dev)
     fmt.fmt.pix.height = dev->height;
     fmt.fmt.pix.pixelformat = dev->fcc;
     fmt.fmt.pix.field = V4L2_FIELD_NONE;
-    if (dev->fcc == V4L2_PIX_FMT_MJPEG)
+    if (dev->fcc == V4L2_PIX_FMT_YUYV)
+        fmt.fmt.pix.sizeimage = dev->width * dev->height * 2;
+    else if (dev->fcc == V4L2_PIX_FMT_MJPEG)
         fmt.fmt.pix.sizeimage = dev->imgsize * 1.5;
 
     ret = ioctl(dev->uvc_fd, VIDIOC_S_FMT, &fmt);
@@ -761,7 +737,7 @@ static int uvc_video_set_format(struct uvc_device *dev)
         return ret;
     }
 
-    printf("UVC: Setting format to: %c%c%c%c %ux%u\n", pixfmtstr(dev->fcc), dev->width, dev->height);
+    printf("UVC: Setting format to: %c%c%c%c %ux%u size %d\n", pixfmtstr(dev->fcc), dev->width, dev->height, (int)fmt.fmt.pix.sizeimage);
 
     return 0;
 }
@@ -1169,7 +1145,7 @@ static int uvc_video_reqbufs_mmap(struct uvc_device *dev, int nbufs)
         }
 
         dev->mem[i].length = dev->mem[i].buf.length;
-        printf("UVC: Buffer %u mapped at address %p.\n", i, dev->mem[i].start);
+        printf("UVC: Buffer %u mapped at address %p, len %zu\n", i, dev->mem[i].start, dev->mem[i].length);
     }
 
     dev->nbufs = rb.count;
@@ -1873,6 +1849,7 @@ static int uvc_events_process_data(struct uvc_device *dev, struct uvc_request_da
         dev->fcc = format->fcc;
         dev->width = frame->width;
         dev->height = frame->height;
+        uvc_video_set_format(dev);
     }
 
     return 0;
@@ -2032,10 +2009,6 @@ static void usage(const char *argv0)
             "0 = MMAP\n\t"
             "1 = USER_PTR\n");
     fprintf(stderr,
-            " -r <resolution> Select frame resolution:\n\t"
-            "0 = 360p, VGA (640x360)\n\t"
-            "1 = 720p, WXGA (1280x720)\n");
-    fprintf(stderr,
             " -s <speed>	Select USB bus speed (b/w 0 and 2)\n\t"
             "0 = Full Speed (FS)\n\t"
             "1 = High Speed (HS)\n\t"
@@ -2061,7 +2034,6 @@ int main(int argc, char *argv[])
     int dummy_data_gen_mode = 0;
     /* Frame format/resolution related params. */
     int default_format = 0;     /* V4L2_PIX_FMT_YUYV */
-    int default_resolution = 0; /* VGA 360p */
     int nbufs = 2;              /* Ping-Pong buffers */
     /* USB speed related params */
     int mult = 0;
@@ -2069,7 +2041,7 @@ int main(int argc, char *argv[])
     enum usb_device_speed speed = USB_SPEED_SUPER; /* High-Speed */
     enum io_method uvc_io_method = IO_METHOD_USERPTR;
 
-    while ((opt = getopt(argc, argv, "bdf:hi:m:n:o:r:s:t:u:v:")) != -1) {
+    while ((opt = getopt(argc, argv, "bdf:hi:m:n:o:s:t:u:v:")) != -1) {
         switch (opt) {
         case 'b':
             bulk_mode = 1;
@@ -2126,15 +2098,6 @@ int main(int argc, char *argv[])
             printf("UVC: IO method requested is %s\n", (uvc_io_method == IO_METHOD_MMAP) ? "MMAP" : "USER_PTR");
             break;
 
-        case 'r':
-            if (atoi(optarg) < 0 || atoi(optarg) > 1) {
-                usage(argv[0]);
-                return 1;
-            }
-
-            default_resolution = atoi(optarg);
-            break;
-
         case 's':
             if (atoi(optarg) < 0 || atoi(optarg) > 2) {
                 usage(argv[0]);
@@ -2176,8 +2139,8 @@ int main(int argc, char *argv[])
          */
         CLEAR(fmt);
         fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        fmt.fmt.pix.width = (default_resolution == 0) ? 640 : 1280;
-        fmt.fmt.pix.height = (default_resolution == 0) ? 360 : 720;
+        fmt.fmt.pix.width = DEFAULT_WIDTH;
+        fmt.fmt.pix.height = DEFAULT_HEIGHT;
         fmt.fmt.pix.sizeimage = (default_format == 0) ? (fmt.fmt.pix.width * fmt.fmt.pix.height * 2)
                                                       : (fmt.fmt.pix.width * fmt.fmt.pix.height * 1.5);
         fmt.fmt.pix.pixelformat = (default_format == 0) ? V4L2_PIX_FMT_YUYV : V4L2_PIX_FMT_MJPEG;
@@ -2204,8 +2167,8 @@ int main(int argc, char *argv[])
     }
 
     /* Set parameters as passed by user. */
-    udev->width = (default_resolution == 0) ? 640 : 1280;
-    udev->height = (default_resolution == 0) ? 360 : 720;
+    udev->width = DEFAULT_WIDTH;
+    udev->height = DEFAULT_HEIGHT;
     udev->imgsize = (default_format == 0) ? (udev->width * udev->height * 2) : (udev->width * udev->height * 1.5);
     udev->fcc = (default_format == 0) ? V4L2_PIX_FMT_YUYV : V4L2_PIX_FMT_MJPEG;
     udev->io = uvc_io_method;
