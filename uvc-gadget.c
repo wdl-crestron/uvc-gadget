@@ -184,7 +184,7 @@ struct uvc_device {
     unsigned int height;
 
     unsigned int bulk;
-    uint8_t color;
+    uint8_t color[3]; // Y+Cb+Cr
     unsigned int imgsize;
     void *imgdata;
 
@@ -866,9 +866,14 @@ static void uvc_video_fill_buffer(struct uvc_device *dev, struct v4l2_buffer *bu
     case V4L2_PIX_FMT_YUYV:
         /* Fill the buffer with video data. */
         bpl = dev->width * 2;
-        for (i = 0; i < dev->height; ++i)
-            memset(dev->mem[buf->index].start + i * bpl, dev->color++, bpl);
 
+        for (i = 0; i < dev->height; ++i)
+        {
+            uint8_t *line =  dev->mem[buf->index].start + i * bpl;
+            for(unsigned int j = 0; j < bpl; ++j) line[j] = dev->color[j % 3];
+        }
+
+        ++dev->color[0]; // Y
         buf->bytesused = bpl * dev->height;
         break;
 
@@ -1216,7 +1221,8 @@ static int uvc_video_reqbufs_userptr(struct uvc_device *dev, int nbufs)
 
             if (V4L2_PIX_FMT_YUYV == dev->fcc)
                 for (j = 0; j < dev->height; ++j)
-                    memset(dev->dummy_buf[i].start + j * bpl, dev->color++, bpl);
+                    memset(dev->dummy_buf[i].start + j * bpl, dev->color[0], bpl);
+            ++dev->color[0];
 
             if (V4L2_PIX_FMT_MJPEG == dev->fcc)
                 memcpy(dev->dummy_buf[i].start, dev->imgdata, dev->imgsize);
@@ -1361,6 +1367,8 @@ uvc_fill_streaming_control(struct uvc_device *dev, struct uvc_streaming_control 
         ctrl->dwMaxPayloadTransferSize = (dev->maxpkt) * (dev->mult + 1) * (dev->burst + 1);
     else
         ctrl->dwMaxPayloadTransferSize = ctrl->dwMaxVideoFrameSize;
+
+    printf("%s:%d dwMaxPayloadTransferSize %d\n", __FUNCTION__, __LINE__, (int)ctrl->dwMaxPayloadTransferSize);
 
     ctrl->bmFramingInfo = 3;
     ctrl->bPreferedVersion = 1;
@@ -2010,9 +2018,9 @@ static void usage(const char *argv0)
             "1 = USER_PTR\n");
     fprintf(stderr,
             " -s <speed>	Select USB bus speed (b/w 0 and 2)\n\t"
-            "0 = Full Speed (FS)\n\t"
-            "1 = High Speed (HS)\n\t"
-            "2 = Super Speed (SS)\n");
+            "%d = Full Speed (FS)\n\t"
+            "%d = High Speed (HS)\n\t"
+            "%d = Super Speed (SS)\n", USB_SPEED_FULL, USB_SPEED_HIGH, USB_SPEED_SUPER);
     fprintf(stderr, " -t		Streaming burst (b/w 0 and 15)\n");
     fprintf(stderr, " -u device	UVC Video Output device\n");
     fprintf(stderr, " -v device	V4L2 Video Capture device\n");
@@ -2099,7 +2107,7 @@ int main(int argc, char *argv[])
             break;
 
         case 's':
-            if (atoi(optarg) < 0 || atoi(optarg) > 2) {
+            if (atoi(optarg) <= USB_SPEED_UNKNOWN || atoi(optarg) > USB_SPEED_SUPER_PLUS) {
                 usage(argv[0]);
                 return 1;
             }
